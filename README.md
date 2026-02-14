@@ -9,6 +9,8 @@ For simplicity:
 3. Direct method calls to a node instead of messages sent over the network
 4. Node membership is fixed and stored on the node. In the real world, we could use some configuration managing service.
 
+To get a high level understanding of the code, look at https://github.com/panjiyar/eight-sleep-raft/blob/54583c883e493ce6acd52481f27baf3a85d76c18/raft.py
+
 ## Prerequisites
 
 - Python 3

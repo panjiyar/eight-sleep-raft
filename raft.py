@@ -1,14 +1,3 @@
-"""
-Raft-Lite: A toy implementation of the Raft consensus algorithm.
-
-Simplifications:
-1. Fixed membership - no dynamic membership changes
-2. Peer list hardcoded on node - no service discovery
-3. In-memory only - no persistent storage
-4. Synchronous tick-based timing - no real timers
-5. Direct method calls (SimNetwork) - no real network RPCs
-"""
-
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any
@@ -113,21 +102,42 @@ class RaftNode:
 
     # ==================== Client API ====================
 
-     def submit_command(self, command: Dict[str, Any]) -> bool:
+    def submit_command(self, command: Dict[str, Any]) -> bool:
         """Submit a command. Only succeeds if node is leader."""
-        # TODO: Implement
-        # - Reject if not leader
-        # - Append to log, return True
-        pass
+        if self.state != NodeState.LEADER:
+            return False
+        self.log.append(LogEntry(term=self.current_term, command=command))
+        return True
     
     # ==================== Core API: called by SimNetwork ====================
 
     def tick(self) -> List[Message]:
         """Advance time by one tick. Returns messages to send."""
-        # TODO: Implement tick logic
-        # - Leaders: send heartbeats every HEARTBEAT_INTERVAL
-        # - Followers/Candidates: start election if ELECTION_TIMEOUT reached
-        pass
+        self.ticks_elapsed += 1
+        messages = []
+
+        if self.state == NodeState.LEADER:
+            # Leaders send heartbeats every HEARTBEAT_INTERVAL
+            if self.ticks_elapsed >= self.HEARTBEAT_INTERVAL:
+                self.ticks_elapsed = 0
+                messages = self._send_heartbeats()
+        else:
+            # Followers/Candidates start election if ELECTION_TIMEOUT reached
+            if self.ticks_elapsed >= self.ELECTION_TIMEOUT:
+                self._start_election()
+                # Send RequestVote to all peers
+                for peer in self.peers:
+                    last_log_index = len(self.log) - 1
+                    last_log_term = self.log[-1].term if self.log else 0
+                    req = RequestVoteRequest(
+                        term=self.current_term,
+                        candidate_id=self.node_id,
+                        last_log_index=last_log_index,
+                        last_log_term=last_log_term
+                    )
+                    messages.append(Message(sender=self.node_id, target=peer, payload=req))
+
+        return messages
 
     # sent by candidates to anyone
     def handle_request_vote(self, req: RequestVoteRequest) -> RequestVoteResponse:
