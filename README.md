@@ -10,7 +10,7 @@
 
 ```bash
 # Clone the repo
-git clone <repo-url>
+git clone https://github.com/panjiyar/eight-sleep-raft
 cd eight-sleep-raft
 
 # Create and activate a virtual environment
