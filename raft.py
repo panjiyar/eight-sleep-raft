@@ -76,7 +76,7 @@ class RaftNode:
     def __init__(self, node_id: str, peers: List[str], majority: Optional[int] = None):
         self.node_id = node_id
         self.peers = peers
-        self.majority = majority or (len(peers) // 2) + 1
+        self.majority = majority or (len(peers) // 2) + 1 # lets assume that the majority is never less than (n/2) + 1
 
         self.election_timeout = random.randint(self.ELECTION_TIMEOUT_MIN, self.ELECTION_TIMEOUT_MAX)
 
@@ -121,10 +121,8 @@ class RaftNode:
         messages = []
 
         if self.state == NodeState.LEADER:
-            # Leaders send heartbeats every HEARTBEAT_INTERVAL
-            if self.ticks_elapsed >= self.HEARTBEAT_INTERVAL:
-                self.ticks_elapsed = 0
-                messages = self._send_heartbeats()
+            # Leaders send AppendEntries every tick (replication or heartbeat)
+            messages = self._send_heartbeats()
         else:
             # Followers/Candidates start election if election_timeout reached
             if self.ticks_elapsed >= self.election_timeout:
