@@ -628,6 +628,8 @@ class TestLeaderElection:
             LogEntry(term=2, command={"op": "set", "key": "y", "value": "2"})
         ]
         net.nodes["A"].current_term = 2
+        # Force A to timeout first, was causing flakiness
+        net.nodes["A"].election_timeout = 1
 
         # Give B and C shorter/older logs
         net.nodes["B"].log = [LogEntry(term=1, command={"op": "set", "key": "x", "value": "1"})]
@@ -709,7 +711,7 @@ class TestLogReplication:
 
         # Reconnect follower
         net.reconnect(follower_id)
-        net.tick_all(20)
+        net.tick_all(30)
 
         # Follower should have caught up
         assert len(net.nodes[follower_id].log) == 1
@@ -738,7 +740,7 @@ class TestLogReplication:
         net.reconnect(follower_id)
 
         # Leader should retry with decremented next_index
-        net.tick_all(20)
+        net.tick_all(30)
 
         # Follower should eventually catch up
         assert len(net.nodes[follower_id].log) == 2

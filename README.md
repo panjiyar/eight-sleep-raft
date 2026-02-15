@@ -9,7 +9,10 @@ For simplicity:
 3. Direct method calls to a node instead of messages sent over the network
 4. Node membership is fixed and stored on the node. In the real world, we could use some configuration managing service.
 
-To get a high level understanding of the code, look at https://github.com/panjiyar/eight-sleep-raft/blob/54583c883e493ce6acd52481f27baf3a85d76c18/raft.py
+To get a high level understanding of this raft implementation, I'd recommmend looking at https://github.com/panjiyar/eight-sleep-raft/blob/54583c883e493ce6acd52481f27baf3a85d76c18/raft.py
+It gives a good overview of the node definition, and if that's clear, then the rest is just implementation details.
+
+I chose to do TDD (test driven development) for this project, so you'll see a lot of tests. Raft is a solved problem, so its easy to write tests for it. The tests are more to ensure that the implementation is correct.
 
 ## Prerequisites
 
@@ -25,9 +28,6 @@ cd eight-sleep-raft
 # Create and activate a virtual environment
 python3 -m venv venv
 source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
 ```
 
 ## Running Tests

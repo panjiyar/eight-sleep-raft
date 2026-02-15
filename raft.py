@@ -73,7 +73,7 @@ class RaftNode:
     ELECTION_TIMEOUT_MAX = 15
     HEARTBEAT_INTERVAL = 2
 
-    def __init__(self, node_id: str, peers: List[str], majority: int | None = None):
+    def __init__(self, node_id: str, peers: List[str], majority: Optional[int] = None):
         self.node_id = node_id
         self.peers = peers
         self.majority = majority or (len(peers) // 2) + 1
@@ -143,84 +143,188 @@ class RaftNode:
 
         return messages
 
-    # sent by candidates to anyone
+    # ==================== RequestVote RPC ====================
+
     def handle_request_vote(self, req: RequestVoteRequest) -> RequestVoteResponse:
         """Handle incoming RequestVote RPC."""
-        # TODO: Implement vote logic
-        # - Reject if req.term < current_term
-        # - Grant vote if haven't voted this term and candidate's log is up-to-date
-        pass
+        # Always update term if we see a higher one
+        if req.term > self.current_term:
+            self._become_follower(req.term)
 
-    # only for candidates
+        # Reject stale term
+        if req.term < self.current_term:
+            return RequestVoteResponse(self.current_term, False)
+
+        # Can we vote for this candidate?
+        already_voted_for_other = self.voted_for is not None and self.voted_for != req.candidate_id
+        if already_voted_for_other:
+            return RequestVoteResponse(self.current_term, False)
+
+        # Is candidate's log up-to-date?
+        if not self._is_log_up_to_date(req.last_log_index, req.last_log_term):
+            return RequestVoteResponse(self.current_term, False)
+
+        # Grant vote
+        self.voted_for = req.candidate_id
+        self._reset_election_timer()
+        return RequestVoteResponse(self.current_term, True)
+
     def handle_request_vote_response(self, from_node: str, resp: RequestVoteResponse):
         """Handle response to our RequestVote RPC."""
-        # TODO: Implement
-        # - If majority votes received, become leader
-        pass
+        if resp.term > self.current_term:
+            self._become_follower(resp.term)
+            return
 
-    # sent by leader, received by everyone else
+        # Ignore if not candidate or stale response
+        if self.state != NodeState.CANDIDATE or resp.term < self.current_term:
+            return
+
+        if resp.vote_granted:
+            self.votes_received.add(from_node)
+            if len(self.votes_received) >= self.majority:
+                self._become_leader()
+
+    # ==================== AppendEntries RPC ====================
+
     def handle_append_entries(self, req: AppendEntriesRequest) -> AppendEntriesResponse:
-        """Handle incoming AppendEntries RPC (heartbeat or log replication)."""
-        # TODO: Implement
-        # - Reject if req.term < current_term
-        # - Check log consistency at prev_log_index
-        # - Append entries, update commit_index
-        pass
+        """Handle incoming AppendEntries RPC."""
+        # Always update term if we see a higher one
+        if req.term > self.current_term:
+            self._become_follower(req.term)
 
-    # only for leader
+        # Reject stale term
+        if req.term < self.current_term:
+            return AppendEntriesResponse(self.current_term, False)
+
+        # Valid leader - reset timer and record leader
+        self._reset_election_timer()
+        self.leader_id = req.leader_id
+        if self.state == NodeState.CANDIDATE:
+            self.state = NodeState.FOLLOWER
+
+        # Log consistency check
+        if req.prev_log_index >= 0:
+            if req.prev_log_index >= len(self.log):
+                return AppendEntriesResponse(self.current_term, False)
+            if self.log[req.prev_log_index].term != req.prev_log_term:
+                return AppendEntriesResponse(self.current_term, False)
+
+        # Append new entries (truncate conflicts)
+        for i, entry in enumerate(req.entries):
+            idx = req.prev_log_index + 1 + i
+            if idx < len(self.log):
+                if self.log[idx].term != entry.term:
+                    self.log = self.log[:idx]  # truncate
+                    self.log.append(entry)
+            else:
+                self.log.append(entry)
+
+        # Update commit index
+        if req.leader_commit > self.commit_index:
+            self.commit_index = min(req.leader_commit, len(self.log) - 1)
+            self._apply_committed()
+
+        return AppendEntriesResponse(self.current_term, True)
+
     def handle_append_entries_response(self, from_node: str, resp: AppendEntriesResponse):
         """Handle response to our AppendEntries RPC."""
-        # TODO: Implement
-        # - Update next_index/match_index for follower
-        # - Try to advance commit_index if majority replicated
-        pass
+        if resp.term > self.current_term:
+            self._become_follower(resp.term)
+            return
 
+        if self.state != NodeState.LEADER:
+            return
 
-    # ==================== Internal Helpers ====================
+        if resp.success:
+            # Follower accepted - they now have everything we sent
+            self.match_index[from_node] = len(self.log) - 1
+            self.next_index[from_node] = len(self.log)
+            self._try_advance_commit()
+        else:
+            # Follower rejected - decrement and retry next heartbeat
+            self.next_index[from_node] = max(0, self.next_index[from_node] - 1)
+
+    # ==================== State Transitions ====================
 
     def _start_election(self):
-        """Transition to candidate and request votes."""
-        # TODO: Implement
-        pass
+        """Start a new election."""
+        self.current_term += 1
+        self.state = NodeState.CANDIDATE
+        self.voted_for = self.node_id
+        self.votes_received = {self.node_id}
+        self._reset_election_timer()
+        # Single-node cluster: already have majority
+        if len(self.votes_received) >= self.majority:
+            self._become_leader()
 
     def _become_follower(self, term: int):
-        """Step down to follower state."""
-        # TODO: Implement
-        pass
+        """Step down to follower."""
+        self.state = NodeState.FOLLOWER
+        self.current_term = term
+        self.voted_for = None
+        self._reset_election_timer()
 
     def _become_leader(self):
-        """Transition to leader state."""
-        # TODO: Implement
-        pass
+        """Become leader."""
+        self.state = NodeState.LEADER
+        self.leader_id = self.node_id
+        for peer in self.peers:
+            self.next_index[peer] = len(self.log)
+            self.match_index[peer] = -1
+        self.ticks_elapsed = 0
 
-    def _send_heartbeats(self) -> List[Message]:
-        """Send AppendEntries to all peers."""
-        # TODO: Implement
-        pass
+    # ==================== Helper Methods ====================
 
-    def _apply_committed(self):
-        """Apply committed entries to kv_store."""
-        # TODO: Implement
-        pass
-
-    def _is_log_up_to_date(self, last_log_index: int, last_log_term: int) -> bool:
-        """Check if node's log is at least as up-to-date as the callers. usually used by nodes to determine if they should vote for the candidate"""
-        # TODO: Implement
-        pass
-    
-    # only for follower and candidate
     def _reset_election_timer(self):
-        """Reset election timeout counter and re-randomize timeout."""
+        """Reset election timeout."""
         self.ticks_elapsed = 0
         self.election_timeout = random.randint(self.ELECTION_TIMEOUT_MIN, self.ELECTION_TIMEOUT_MAX)
 
-    # only for leader 
+    def _is_log_up_to_date(self, last_log_index: int, last_log_term: int) -> bool:
+        """Check if candidate's log is at least as up-to-date as ours."""
+        my_last_term = self.log[-1].term if self.log else 0
+        my_last_index = len(self.log) - 1
+
+        if last_log_term != my_last_term:
+            return last_log_term > my_last_term
+        return last_log_index >= my_last_index
+
+    def _send_heartbeats(self) -> List[Message]:
+        """Send AppendEntries to all peers."""
+        return [self._send_append_entries(peer) for peer in self.peers]
+
+    def _send_append_entries(self, peer: str) -> Message:
+        """Create AppendEntries message for a peer."""
+        next_idx = self.next_index.get(peer, len(self.log))
+        prev_idx = next_idx - 1
+        prev_term = self.log[prev_idx].term if prev_idx >= 0 else 0
+
+        req = AppendEntriesRequest(
+            term=self.current_term,
+            leader_id=self.node_id,
+            prev_log_index=prev_idx,
+            prev_log_term=prev_term,
+            entries=self.log[next_idx:],
+            leader_commit=self.commit_index
+        )
+        return Message(self.node_id, peer, req)
+
     def _try_advance_commit(self):
         """Advance commit_index if majority has replicated."""
-        # TODO: Implement
-        pass
-    
-    def _send_append_entries(self, peer: str) -> List[Message]:
-        """Send AppendEntries to a peer."""
-        # TODO: Implement
-        pass
+        for n in range(len(self.log) - 1, self.commit_index, -1):
+            if self.log[n].term != self.current_term:
+                continue  # Only commit entries from current term
+            # Count replicas (including self)
+            count = 1 + sum(1 for p in self.peers if self.match_index.get(p, -1) >= n)
+            if count >= self.majority:
+                self.commit_index = n
+                self._apply_committed()
+                break
+
+    def _apply_committed(self):
+        """Apply committed entries to state machine."""
+        while self.last_applied < self.commit_index:
+            self.last_applied += 1
+            cmd = self.log[self.last_applied].command
+            if cmd.get("op") == "set":
+                self.kv_store[cmd["key"]] = cmd["value"]
