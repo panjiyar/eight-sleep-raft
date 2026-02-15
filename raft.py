@@ -1,3 +1,4 @@
+import random
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any
@@ -68,13 +69,16 @@ class RaftNode:
     2. On tick(), returns a list of outgoing messages to send
     """
 
-    ELECTION_TIMEOUT = 5
+    ELECTION_TIMEOUT_MIN = 5
+    ELECTION_TIMEOUT_MAX = 15
     HEARTBEAT_INTERVAL = 2
 
     def __init__(self, node_id: str, peers: List[str], majority: int | None = None):
         self.node_id = node_id
-        self.peers = peers 
+        self.peers = peers
         self.majority = majority or (len(peers) // 2) + 1
+
+        self.election_timeout = random.randint(self.ELECTION_TIMEOUT_MIN, self.ELECTION_TIMEOUT_MAX)
 
         # Persistent state (would survive crashes in real Raft)
         self.current_term = 0 
@@ -122,8 +126,8 @@ class RaftNode:
                 self.ticks_elapsed = 0
                 messages = self._send_heartbeats()
         else:
-            # Followers/Candidates start election if ELECTION_TIMEOUT reached
-            if self.ticks_elapsed >= self.ELECTION_TIMEOUT:
+            # Followers/Candidates start election if election_timeout reached
+            if self.ticks_elapsed >= self.election_timeout:
                 self._start_election()
                 # Send RequestVote to all peers
                 for peer in self.peers:
@@ -204,10 +208,11 @@ class RaftNode:
         # TODO: Implement
         pass
     
-    # only for follower and candidate 
+    # only for follower and candidate
     def _reset_election_timer(self):
-        """Reset election timeout counter."""
+        """Reset election timeout counter and re-randomize timeout."""
         self.ticks_elapsed = 0
+        self.election_timeout = random.randint(self.ELECTION_TIMEOUT_MIN, self.ELECTION_TIMEOUT_MAX)
 
     # only for leader 
     def _try_advance_commit(self):
